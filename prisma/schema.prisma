@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==============================
+// CORE ENUMS
+// ==============================
+
+enum FileType {
+  PDF
+  IMAGE
+}
+
+enum ResourceType {
+  PAST_PAPER
+  NOTES
+  BOOK
+  ASSIGNMENT
+  SLIDES
+  MCQS
+  GUESS_PAPER
+  LAB_MANUAL
+  JOB_TEST
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// ==============================
+// USER & AUTH (Firebase Integration)
+// ==============================
+model User {
+  id          String  @id // Firebase UID (from Firebase Auth)
+  email       String  @unique
+  displayName String?
+  photoURL    String?
+
+  // Firebase specific fields
+  emailVerified Boolean   @default(false)
+  phoneNumber   String?
+  providerData  Json? // Stores provider-specific data (Google, Facebook, etc.)
+  lastLoginAt   DateTime?
+
+  // App-specific fields
+  role        UserRole @default(USER)
+  institution String? // e.g., "LUMS", "GCU Lahore"
+  country     String? // e.g., "LUMS", "GCU Lahore"
+  department  String? // e.g., "LUMS", "GCU Lahore"
+  bio         String?
+  isActive    Boolean  @default(true)
+
+  // Relations
+  uploads        Resource[]      @relation("Uploader")
+  downloads      Download[]
+  savedResources SavedResource[]
+  reviews        Review[]
+
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  activityLogs ActivityLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+// ==============================
+// RESOURCE METADATA (Boards, Subjects, Tags)
+// ==============================
+model Board {
+  id        String  @id @default(cuid())
+  name      String  @unique // e.g., "FBISE", "Cambridge", "NTS"
+  shortName String? // e.g., "FB", "CIE"
+  country   String? // e.g., "Pakistan", "UK"
+  type      String? // e.g., "Board", "University", "Testing Agency"
+  logoUrl   String? // Optional logo for the board
+  isActive  Boolean @default(true)
+
+  resources Resource[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("boards")
+}
+
+model Subject {
+  id       String  @id @default(cuid())
+  name     String  @unique // e.g., "Mathematics", "Biology"
+  category String? // e.g., "Science", "Humanities", "General"
+  icon     String? // Emoji or icon name
+  isActive Boolean @default(true)
+
+  resources Resource[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("subjects")
+}
+
+model Tag {
+  id       String  @id @default(cuid())
+  name     String  @unique // e.g., "NTS", "CSS", "o-level", "2023"
+  color    String? // Hex color code for UI
+  isActive Boolean @default(true)
+
+  resources Resource[] @relation("ResourceTags")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tags")
+}
+
+// ==============================
+// MAIN RESOURCE ENTITY
+// ==============================
+model Resource {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+  slug        String? @unique
+
+  type         ResourceType
+  fileUrl      String
+  thumbnailUrl String?
+
+  fileSize  Int?
+  pageCount Int?
+  language  String?
+
+  year     Int?
+  semester String?
+  edition  String?
+  isFree   Boolean @default(true)
+
+  fileType    String?
+  institution String?
+  examType    String?
+  likes       Int     @default(0)
+
+  viewCount     Int   @default(0)
+  downloadCount Int   @default(0)
+  saveCount     Int   @default(0)
+  reviewCount   Int   @default(0)
+  avgRating     Float @default(0)
+
+  isTrending  Boolean @default(false)
+  isFeatured  Boolean @default(false)
+  isApproved  Boolean @default(false)
+  isPublished Boolean @default(true)
+
+  uploaderId String
+  uploader   User   @relation("Uploader", fields: [uploaderId], references: [id])
+
+  boardId String?
+  board   Board?  @relation(fields: [boardId], references: [id])
+
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id])
+
+  tags Tag[] @relation("ResourceTags")
+
+  downloads Download[]
+  savedBy   SavedResource[]
+  reviews   Review[]
+
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  trendingMetrics TrendingMetric[]
+  activityLogs    ActivityLog[]
+  searchIndex     SearchIndex?
+
+  @@index([type])
+  @@index([year])
+  @@index([boardId])
+  @@index([subjectId])
+  @@index([isApproved])
+  @@index([isPublished])
+  @@index([isTrending])
+  @@index([createdAt])
+  @@map("resources")
+}
+
+// ==============================
+// USER-SPECIFIC INTERACTIONS
+// ==============================
+model SavedResource {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id])
+
+  savedAt DateTime @default(now())
+
+  @@unique([userId, resourceId])
+  @@index([userId])
+  @@map("saved_resources")
+}
+
+model Review {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id])
+
+  rating  Int     @default(0) // 1-5
+  comment String?
+
+  isVerified Boolean @default(false) // User has actually downloaded/used the resource
+  isApproved Boolean @default(false) // Admin approval for inappropriate content
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, resourceId])
+  @@index([resourceId])
+  @@index([rating])
+  @@map("reviews")
+}
+
+// ==============================
+// DOWNLOADS / ACTIVITY LOG
+// ==============================
+model Download {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id])
+
+  downloadedAt DateTime @default(now())
+  ipAddress    String? // For analytics
+  userAgent    String? // For analytics
+  referrer     String? // Where the user came from
+
+  @@unique([userId, resourceId]) // Prevent duplicate log entries
+  @@index([downloadedAt])
+  @@index([userId])
+  @@map("downloads")
+}
+
+// ==============================
+// TRENDING METRICS (Aggregated data for dashboard)
+// ==============================
+model TrendingMetric {
+  id String @id @default(cuid())
+
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id])
+
+  period    String // e.g., "DAY", "WEEK", "MONTH"
+  views     Int    @default(0)
+  downloads Int    @default(0)
+  saves     Int    @default(0)
+
+  recordedAt DateTime @default(now())
+  expiresAt  DateTime // TTL for cache cleanup (e.g., 7 days for weekly)
+
+  @@unique([resourceId, period])
+  @@index([period, recordedAt])
+  @@map("trending_metrics")
+}
+
+// ==============================
+// SITE STATS (Cache for homepage numbers)
+// ==============================
+model SiteStat {
+  id          String  @id @default(cuid())
+  key         String  @unique // e.g., "total_resources", "total_downloads", "total_institutions", "total_students"
+  value       Int     @default(0)
+  description String? // Description of what this stat represents
+
+  updatedAt DateTime @updatedAt
+
+  @@map("site_stats")
+}
+
+// ==============================
+// ACTIVITY LOGS (Audit trail for admin)
+// ==============================
+model ActivityLog {
+  id String @id @default(cuid())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  action     String // e.g., "UPLOAD", "DOWNLOAD", "DELETE", "APPROVE"
+  resourceId String?
+  resource   Resource? @relation(fields: [resourceId], references: [id])
+
+  details   Json? // Additional context as JSON
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// ==============================
+// SEARCH INDEX (Optional: For custom search indexing)
+// ==============================
+model SearchIndex {
+  id         String   @id @default(cuid())
+  resourceId String   @unique
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  searchVector      String? // For PostgreSQL Full-Text Search (tsvector)
+  titleVector       String? // Separate vector for title search
+  descriptionVector String?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([searchVector]) // GiST or GIN index needed
+  @@map("search_index")
+}
